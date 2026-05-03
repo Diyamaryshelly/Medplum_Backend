@@ -58,6 +58,7 @@ import { initBinaryStorage } from './storage/loader';
 import { storageRouter } from './storage/routes';
 import { webhookRouter } from './webhook/routes';
 import { wellKnownRouter } from './wellknown';
+import { ocrRouter } from './ocr-router';
 import { closeWorkers, initWorkers } from './workers';
 import { closeWebSockets, initWebSockets } from './ws/routes';
 
@@ -229,6 +230,7 @@ export async function initApp(app: Express, config: MedplumServerConfig): Promis
   apiRouter.use('/scim/v2/', scimRouter);
   apiRouter.use('/storage/', storageRouter);
   apiRouter.use('/webhook/', webhookRouter);
+  apiRouter.use('/ocr/', ocrRouter);
 
   if (config.mcpEnabled) {
     apiRouter.use('/mcp', mcpRouter);

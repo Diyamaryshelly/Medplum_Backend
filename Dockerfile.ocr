@@ -1,0 +1,23 @@
+# Custom Medplum server image with integrated OCR endpoint (POST /ocr/upload)
+
+# ── Stage 1: Build native dependencies for the target Linux environment ──────
+FROM node:22 AS builder
+WORKDIR /app
+# Install sharp and tesseract.js with all dependencies for Linux
+RUN npm install sharp tesseract.js multer
+
+# ── Stage 2: Final custom image based on the official Medplum server ─────────
+FROM medplum/medplum-server:latest
+
+WORKDIR /usr/src/medplum
+
+# Copy our bundled server executable
+COPY packages/server/dist/index.js      packages/server/dist/index.js
+COPY packages/server/dist/index.js.map  packages/server/dist/index.js.map
+COPY packages/server/dist/otel/         packages/server/dist/otel/
+
+# Copy all production dependencies from the builder stage to ensure Linux compatibility
+# and avoid missing transitive dependencies.
+COPY --from=builder /app/node_modules/ node_modules/
+
+EXPOSE 8103

@@ -40,7 +40,7 @@ services:
 
   # Medplum server container
   medplum-server:
-    image: medplum/medplum-server:latest
+    image: medplum-server-custom:latest
     restart: unless-stopped
     depends_on:
       postgres:

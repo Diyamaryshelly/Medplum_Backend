@@ -50,6 +50,7 @@ const prefixes = [
   '/oauth2/',
   '/keyvalue/',
   '/storage/',
+  '/ocr/',        // OCR upload endpoint — used by Expo frontend
 ];
 
 function isPathAllowed(path: string): boolean {
