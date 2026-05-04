@@ -153,3 +153,83 @@ ocrRouter.post('/upload', upload.single('file'), async (req, res) => {
     res.status(500).json({ error: 'OCR processing failed. Please try a clearer image.' });
   }
 });
+
+// ─── POST /ocr/save ──────────────────────────────────────────────────────────
+// Saves the confirmed vitals to the HAPI FHIR server
+ocrRouter.post('/save', async (req, res) => {
+  const data = req.body;
+  const { patientId } = data;
+
+  if (!patientId) {
+    res.status(400).json({ error: 'patientId is required' });
+    return;
+  }
+
+  const HAPI_URL = 'http://hapi-fhir:8080/fhir'; // Internal docker name since it's on the same network
+  // Fallback to localhost if not in docker or if preferred
+  const TARGET_URL = process.env.HAPI_FHIR_URL || HAPI_URL;
+
+  console.log(`[OCR] Saving vitals for patient ${patientId} to ${TARGET_URL}`);
+
+  const now = new Date().toISOString();
+  const subjectRef = `Patient/${patientId}`;
+  const observations = [];
+
+  // Helper to create Observation
+  const createObs = (name: string, loinc: string, val: number, unit: string) => ({
+    resourceType: 'Observation',
+    status: 'final',
+    code: {
+      coding: [{ system: 'http://loinc.org', code: loinc, display: name }],
+      text: name,
+    },
+    subject: { reference: subjectRef },
+    effectiveDateTime: now,
+    valueQuantity: { value: val, unit, system: 'http://unitsofmeasure.org', code: unit },
+  });
+
+  if (data.hemoglobin) observations.push(createObs('Hemoglobin', '718-7', data.hemoglobin, 'g/dL'));
+  if (data.glucose)    observations.push(createObs('Glucose', '2339-0', data.glucose, 'mg/dL'));
+  if (data.heartRate)  observations.push(createObs('Heart Rate', '8867-4', data.heartRate, 'bpm'));
+
+  if (data.systolic || data.diastolic) {
+    observations.push({
+      resourceType: 'Observation',
+      status: 'final',
+      code: {
+        coding: [{ system: 'http://loinc.org', code: '55284-4', display: 'Blood Pressure' }],
+        text: 'Blood Pressure',
+      },
+      subject: { reference: subjectRef },
+      effectiveDateTime: now,
+      component: [
+        ...(data.systolic ? [{
+          code: { coding: [{ system: 'http://loinc.org', code: '8480-6', display: 'Systolic' }] },
+          valueQuantity: { value: data.systolic, unit: 'mmHg', system: 'http://unitsofmeasure.org', code: 'mm[Hg]' }
+        }] : []),
+        ...(data.diastolic ? [{
+          code: { coding: [{ system: 'http://loinc.org', code: '8462-4', display: 'Diastolic' }] },
+          valueQuantity: { value: data.diastolic, unit: 'mmHg', system: 'http://unitsofmeasure.org', code: 'mm[Hg]' }
+        }] : [])
+      ]
+    });
+  }
+
+  const results = [];
+  for (const obs of observations) {
+    try {
+      const response = await fetch(`${TARGET_URL}/Observation`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/fhir+json' },
+        body: JSON.stringify(obs),
+      });
+      if (response.ok) {
+        results.push(await response.json());
+      }
+    } catch (err) {
+      console.error(`[OCR] Failed to save observation to HAPI:`, err);
+    }
+  }
+
+  res.json({ success: true, count: results.length, observations: results.map(o => (o as any).id) });
+});

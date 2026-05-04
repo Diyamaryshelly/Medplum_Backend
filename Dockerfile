@@ -1,40 +1,46 @@
-# Medplum production Dockerfile
+FROM node:24 AS build-stage
 
-# This Dockerfile depends on files created by scripts/build-docker-server.sh:
-#  1. `medplum-server-metadata.tar.gz` - contains package.json and package-lock.json files
-#  2. `medplum-server-runtime.tar.gz` - contains the compiled JavaScript files and other runtime assets
-
-# The archive files are decompressed and extracted into the specified destinations.
-# We do this to preserve the folder structure in a single layer.
-# See: https://docs.docker.com/reference/dockerfile/#adding-local-tar-archives
-
-# Uses Docker "Hardened Images":
-# https://hub.docker.com/hardened-images/catalog/dhi/node/guides
-# It does not include any development dependencies.
-
-# Builds multiarch docker images
-# https://docs.docker.com/build/building/multi-platform/
-# https://www.docker.com/blog/multi-arch-build-and-images-the-simple-way/
-
-# Supported architectures:
-# linux/amd64, linux/arm64
-# https://github.com/docker-library/official-images#architectures-other-than-amd64
-
-# Stage 1: Build the application and install production dependencies
-FROM dhi.io/node:24-dev AS build-stage
-ENV NODE_ENV=production
 WORKDIR /usr/src/medplum
-ADD ./medplum-server-metadata.tar.gz ./
-RUN npm ci --omit=dev && \
-  rm package-lock.json
 
-# Stage 2: Create the runtime image
-FROM dhi.io/node:24 AS runtime-stage
-ENV NODE_ENV=production
+# ── Step 1: Copy root manifests ──────────────────────────────────────────────
+COPY package*.json ./
+COPY turbo.json ./
+
+# ── Step 2: Copy package.json for EVERY workspace package ────────────────────
+# npm needs all workspace package.json files present before "npm install"
+# so it can correctly build the dependency graph and link workspaces.
+COPY packages/fhirtypes/package.json     ./packages/fhirtypes/
+COPY packages/definitions/package.json   ./packages/definitions/
+COPY packages/hl7/package.json           ./packages/hl7/
+COPY packages/core/package.json          ./packages/core/
+COPY packages/fhir-router/package.json   ./packages/fhir-router/
+COPY packages/bot-layer/package.json     ./packages/bot-layer/
+COPY packages/ccda/package.json          ./packages/ccda/
+COPY packages/mock/package.json          ./packages/mock/
+COPY packages/react-hooks/package.json   ./packages/react-hooks/
+COPY packages/react/package.json         ./packages/react/
+COPY packages/app/package.json           ./packages/app/
+COPY packages/server/package.json        ./packages/server/
+COPY packages/agent/package.json         ./packages/agent/
+COPY packages/cli/package.json           ./packages/cli/
+COPY packages/graphiql/package.json      ./packages/graphiql/
+
+# ── Step 3: Install all dependencies ─────────────────────────────────────────
+RUN npm install
+
+# ── Step 4: Copy full source ──────────────────────────────────────────────────
+COPY . .
+
+# ── Step 5: Build ONLY the server and its transitive deps ────────────────────
+# @medplum/app is NOT needed — the ENTRYPOINT only runs the server.
+RUN npx turbo run build --filter=@medplum/server
+
+# ── Final Stage: Runtime ──────────────────────────────────────────────────────
+FROM node:24-slim
 WORKDIR /usr/src/medplum
-COPY --from=build-stage /usr/src/medplum/ ./
-ADD ./medplum-server-runtime.tar.gz ./
 
-EXPOSE 5000 8103
+COPY --from=build-stage /usr/src/medplum ./
+
+EXPOSE 8103
 
 ENTRYPOINT [ "node", "--require", "./packages/server/dist/otel/instrumentation.js", "packages/server/dist/index.js" ]

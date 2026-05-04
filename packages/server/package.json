@@ -15,7 +15,7 @@
   "author": "Medplum <hello@medplum.com>",
   "type": "module",
   "scripts": {
-    "build": "npm run clean && tsc && node build.mjs",
+    "build": "npm run clean && node build.mjs",
     "circular": "npx madge --circular dist/index.js",
     "clean": "rimraf dist",
     "dev": "tsx watch --import ./src/otel/instrumentation.ts src/index.ts",
