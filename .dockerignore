@@ -1,8 +1,75 @@
+# Ignore files that shouldn't be copied into Docker image
+# This speeds up builds and reduces image size
+
+# Git
 .git
-.gitattributes
-.github
 .gitignore
+.gitattributes
+
+# Documentation
+*.md
+!README.md
+docs/
+
+# Development files
+.vscode/
+.idea/
+*.log
+*.swp
+*.swo
+*~
+
+# Dependencies (will be installed in container)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build outputs (will be built in container)
+dist/
+build/
+.turbo/
+*.tsbuildinfo
+
+# Test files
+coverage/
+.nyc_output/
+*.test.ts
+*.test.js
+__tests__/
+__mocks__/
+
+# Environment files (use docker-compose environment instead)
+.env
+.env.local
+.env.*.local
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+*.sublime-project
+*.sublime-workspace
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Docker files (don't need these inside the image)
+Dockerfile*
+docker-compose*.yml
 .dockerignore
-Dockerfile
-docker-compose.yml
-node_modules
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml
+
+# Examples (not needed in production image)
+examples/
+
+# Binary storage (will be in volume)
+packages/server/binary/

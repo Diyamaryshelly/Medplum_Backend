@@ -6,6 +6,13 @@ import { createWorker } from 'tesseract.js';
 
 export const ocrRouter = Router();
 
+// ─── HAPI FHIR target URL ────────────────────────────────────────────────────
+// Uses env var if set (e.g. for Docker), otherwise falls back to localhost.
+const HAPI_FHIR_URL = process.env.HAPI_FHIR_URL || 'http://localhost:8080/fhir';
+
+// ─── Hardcoded patient ID — matches existing Patient/1000 in HAPI ────────────
+const DEFAULT_PATIENT_ID = '1000';
+
 // ─── Multer: store upload in memory ─────────────────────────────────────────
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -141,41 +148,70 @@ ocrRouter.post('/upload', upload.single('file'), async (req, res) => {
 
     const vitals = parseVitals(data.text);
 
-    const response = {
+    // ── Auto-save to HAPI FHIR with hardcoded patientId ──────────────────────
+    console.log(`[OCR] Auto-saving vitals to HAPI for patient ${DEFAULT_PATIENT_ID}`);
+    const savedObservations = await saveVitalsToHapi(vitals, DEFAULT_PATIENT_ID);
+    console.log(`[OCR] Saved ${savedObservations.length} observation(s) to HAPI`);
+
+    res.json({
       ...vitals,
+      patientId: DEFAULT_PATIENT_ID,
+      saved: true,
+      savedCount: savedObservations.length,
+      savedIds: savedObservations.map((o: any) => o.id),
       // Include raw text so the client can log it for debugging
       _rawText: data.text.substring(0, 500),
-    };
-
-    res.json(response);
+    });
   } catch (error) {
     console.error('[OCR] Processing failed:', error);
     res.status(500).json({ error: 'OCR processing failed. Please try a clearer image.' });
   }
 });
 
-// ─── POST /ocr/save ──────────────────────────────────────────────────────────
-// Saves the confirmed vitals to the HAPI FHIR server
-ocrRouter.post('/save', async (req, res) => {
-  const data = req.body;
-  const { patientId } = data;
-
-  if (!patientId) {
-    res.status(400).json({ error: 'patientId is required' });
-    return;
+// ─── Ensure patient exists in HAPI (upsert via PUT) ─────────────────────────
+async function ensurePatientInHapi(patientId: string): Promise<void> {
+  const url = `${HAPI_FHIR_URL}/Patient/${patientId}`;
+  try {
+    // Check if patient already exists
+    const check = await fetch(url, { headers: { Accept: 'application/json' } });
+    if (check.ok) {
+      console.log(`[OCR] Patient/${patientId} already exists in HAPI`);
+      return;
+    }
+    // Patient not found — create it via PUT so we keep the same ID
+    console.log(`[OCR] Patient/${patientId} not found in HAPI — creating...`);
+    const create = await fetch(url, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        resourceType: 'Patient',
+        id: patientId,
+        name: [{ text: `Patient ${patientId}` }],
+      }),
+    });
+    if (create.ok) {
+      console.log(`[OCR] Patient/${patientId} created in HAPI`);
+    } else {
+      const err = await create.text();
+      console.error(`[OCR] Failed to create Patient/${patientId} in HAPI:`, err);
+    }
+  } catch (err) {
+    console.error(`[OCR] Network error while upserting Patient/${patientId}:`, err);
   }
+}
 
-  const HAPI_URL = 'http://hapi-fhir:8080/fhir'; // Internal docker name since it's on the same network
-  // Fallback to localhost if not in docker or if preferred
-  const TARGET_URL = process.env.HAPI_FHIR_URL || HAPI_URL;
+// ─── Shared helper: build & POST observations to HAPI FHIR ───────────────────
+async function saveVitalsToHapi(vitals: ParsedVitals, patientId: string): Promise<any[]> {
+  console.log(`[OCR] saveVitalsToHapi → ${HAPI_FHIR_URL}, patient: ${patientId}`);
 
-  console.log(`[OCR] Saving vitals for patient ${patientId} to ${TARGET_URL}`);
+  // Always ensure the patient exists in HAPI before saving observations
+  await ensurePatientInHapi(patientId);
 
   const now = new Date().toISOString();
   const subjectRef = `Patient/${patientId}`;
-  const observations = [];
+  const observations: any[] = [];
 
-  // Helper to create Observation
+  // Helper to create a simple scalar Observation
   const createObs = (name: string, loinc: string, val: number, unit: string) => ({
     resourceType: 'Observation',
     status: 'final',
@@ -188,11 +224,11 @@ ocrRouter.post('/save', async (req, res) => {
     valueQuantity: { value: val, unit, system: 'http://unitsofmeasure.org', code: unit },
   });
 
-  if (data.hemoglobin) observations.push(createObs('Hemoglobin', '718-7', data.hemoglobin, 'g/dL'));
-  if (data.glucose)    observations.push(createObs('Glucose', '2339-0', data.glucose, 'mg/dL'));
-  if (data.heartRate)  observations.push(createObs('Heart Rate', '8867-4', data.heartRate, 'bpm'));
+  if (vitals.hemoglobin) observations.push(createObs('Hemoglobin', '718-7', vitals.hemoglobin, 'g/dL'));
+  if (vitals.glucose)    observations.push(createObs('Glucose', '2339-0', vitals.glucose, 'mg/dL'));
+  if (vitals.heartRate)  observations.push(createObs('Heart Rate', '8867-4', vitals.heartRate, '/min'));
 
-  if (data.systolic || data.diastolic) {
+  if (vitals.systolic || vitals.diastolic) {
     observations.push({
       resourceType: 'Observation',
       status: 'final',
@@ -203,33 +239,139 @@ ocrRouter.post('/save', async (req, res) => {
       subject: { reference: subjectRef },
       effectiveDateTime: now,
       component: [
-        ...(data.systolic ? [{
-          code: { coding: [{ system: 'http://loinc.org', code: '8480-6', display: 'Systolic' }] },
-          valueQuantity: { value: data.systolic, unit: 'mmHg', system: 'http://unitsofmeasure.org', code: 'mm[Hg]' }
+        ...(vitals.systolic ? [{
+          code: { coding: [{ system: 'http://loinc.org', code: '8480-6', display: 'Systolic BP' }] },
+          valueQuantity: { value: vitals.systolic, unit: 'mmHg', system: 'http://unitsofmeasure.org', code: 'mm[Hg]' }
         }] : []),
-        ...(data.diastolic ? [{
-          code: { coding: [{ system: 'http://loinc.org', code: '8462-4', display: 'Diastolic' }] },
-          valueQuantity: { value: data.diastolic, unit: 'mmHg', system: 'http://unitsofmeasure.org', code: 'mm[Hg]' }
+        ...(vitals.diastolic ? [{
+          code: { coding: [{ system: 'http://loinc.org', code: '8462-4', display: 'Diastolic BP' }] },
+          valueQuantity: { value: vitals.diastolic, unit: 'mmHg', system: 'http://unitsofmeasure.org', code: 'mm[Hg]' }
         }] : [])
       ]
     });
   }
 
-  const results = [];
+  const results: any[] = [];
   for (const obs of observations) {
     try {
-      const response = await fetch(`${TARGET_URL}/Observation`, {
+      const response = await fetch(`${HAPI_FHIR_URL}/Observation`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/fhir+json' },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(obs),
       });
+      const body = await response.json();
       if (response.ok) {
-        results.push(await response.json());
+        console.log(`[OCR] Saved observation: ${body.id} (${obs.code?.text})`);
+        results.push(body);
+      } else {
+        console.error(`[OCR] HAPI rejected observation (${obs.code?.text}):`, JSON.stringify(body));
       }
     } catch (err) {
-      console.error(`[OCR] Failed to save observation to HAPI:`, err);
+      console.error(`[OCR] Network error saving to HAPI (${obs.code?.text}):`, err);
     }
   }
 
-  res.json({ success: true, count: results.length, observations: results.map(o => (o as any).id) });
+  return results;
+}
+
+// ─── POST /ocr/save ──────────────────────────────────────────────────────────
+// Manual save endpoint — strictly uses DEFAULT_PATIENT_ID (1000)
+ocrRouter.post('/save', async (req, res) => {
+  const data = req.body;
+  // Always use DEFAULT_PATIENT_ID (1000) regardless of what is in the body
+  const patientId: string = DEFAULT_PATIENT_ID;
+
+  console.log(`[OCR] /save called for patient ${patientId}`);
+  console.log(`[OCR] Vitals received:`, JSON.stringify({
+    hemoglobin: data.hemoglobin,
+    glucose: data.glucose,
+    heartRate: data.heartRate,
+    systolic: data.systolic,
+    diastolic: data.diastolic,
+  }));
+
+  const vitals: ParsedVitals = {
+    hemoglobin: data.hemoglobin ?? null,
+    glucose:    data.glucose    ?? null,
+    heartRate:  data.heartRate  ?? null,
+    systolic:   data.systolic   ?? null,
+    diastolic:  data.diastolic  ?? null,
+  };
+
+  const hasAnyVital = Object.values(vitals).some(v => v !== null);
+  if (!hasAnyVital) {
+    res.status(400).json({ error: 'No valid vitals found in request body', received: data });
+    return;
+  }
+
+  const results = await saveVitalsToHapi(vitals, patientId);
+  res.json({
+    success: results.length > 0,
+    patientId,
+    hapiUrl: HAPI_FHIR_URL,
+    count: results.length,
+    savedIds: results.map((o: any) => o.id),
+    warning: results.length === 0 ? 'No observations were saved — check server logs for [OCR] HAPI errors' : undefined,
+  });
 });
+
+// ─── GET /ocr/debug ───────────────────────────────────────────────────────────
+// Diagnostic: tests HAPI connectivity, patient upsert, and observation POST
+ocrRouter.get('/debug', async (_req, res) => {
+  const report: Record<string, any> = { hapiUrl: HAPI_FHIR_URL };
+
+  // Step 1: Can we reach HAPI at all?
+  try {
+    const ping = await fetch(`${HAPI_FHIR_URL}/metadata`, { headers: { Accept: 'application/json' } });
+    report.hapiReachable = ping.ok;
+    report.hapiStatus = ping.status;
+  } catch (err: any) {
+    report.hapiReachable = false;
+    report.hapiError = err.message;
+    res.json(report);
+    return;
+  }
+
+  // Step 2: Can we create/upsert a patient?
+  const testPatientId = 'debug-test-patient';
+  try {
+    const p = await fetch(`${HAPI_FHIR_URL}/Patient/${testPatientId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ resourceType: 'Patient', id: testPatientId, name: [{ text: 'Debug Test' }] }),
+    });
+    report.patientUpsert = { status: p.status, ok: p.ok };
+    if (!p.ok) report.patientUpsertError = await p.text();
+  } catch (err: any) {
+    report.patientUpsert = { ok: false, error: err.message };
+  }
+
+  // Step 3: Can we post an Observation?
+  try {
+    const obs = {
+      resourceType: 'Observation',
+      status: 'final',
+      code: { coding: [{ system: 'http://loinc.org', code: '718-7', display: 'Hemoglobin' }], text: 'Hemoglobin' },
+      subject: { reference: `Patient/${testPatientId}` },
+      effectiveDateTime: new Date().toISOString(),
+      valueQuantity: { value: 13.5, unit: 'g/dL', system: 'http://unitsofmeasure.org', code: 'g/dL' },
+    };
+    const o = await fetch(`${HAPI_FHIR_URL}/Observation`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(obs),
+    });
+    const body = await o.json();
+    report.observationPost = { status: o.status, ok: o.ok, id: (body as any).id };
+    if (!o.ok) report.observationPostError = body;
+  } catch (err: any) {
+    report.observationPost = { ok: false, error: err.message };
+  }
+
+  report.verdict = report.hapiReachable && report.patientUpsert?.ok && report.observationPost?.ok
+    ? '✅ All checks passed — HAPI is working correctly'
+    : '❌ One or more checks failed — see details above';
+
+  res.json(report);
+});
+
