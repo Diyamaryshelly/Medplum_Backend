@@ -42,6 +42,20 @@ services:
       timeout: 5s
       retries: 5
 
+  hapi-fhir:
+    image: hapiproject/hapi:latest
+    container_name: hapi_fhir
+    restart: unless-stopped
+    ports:
+      - '8080:8080'
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/fhir/metadata"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+
   # Medplum server with volume mounting for hot reload development
   medplum-server:
     build:
@@ -52,6 +66,8 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      hapi-fhir:
         condition: service_healthy
     ports:
       - '8103:8103'
@@ -102,6 +118,7 @@ services:
       MEDPLUM_ALLOWED_ORIGINS: '*'
       MEDPLUM_INTROSPECTION_ENABLED: 'true'
       MEDPLUM_SHUTDOWN_TIMEOUT_MILLISECONDS: 30000
+      HAPI_FHIR_URL: 'http://hapi-fhir:8080/fhir'
     healthcheck:
       test: ['CMD', 'curl', '-f', 'http://localhost:8103/healthcheck']
       interval: 30s

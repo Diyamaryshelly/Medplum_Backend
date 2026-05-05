@@ -10,8 +10,9 @@ export const ocrRouter = Router();
 // Uses env var if set (e.g. for Docker), otherwise falls back to localhost.
 const HAPI_FHIR_URL = process.env.HAPI_FHIR_URL || 'http://localhost:8080/fhir';
 
-// ─── Hardcoded patient ID — matches existing Patient/1000 in HAPI ────────────
-const DEFAULT_PATIENT_ID = '1000';
+// ─── Hardcoded patient ID ─────────────────────────────────────────────────────
+// This is the single patient ID used for all OCR operations
+const PATIENT_ID = 'eb2573d0-cafc-4b6a-9400-05747579f9b1';
 
 // ─── Multer: store upload in memory ─────────────────────────────────────────
 const upload = multer({ storage: multer.memoryStorage() });
@@ -108,6 +109,7 @@ ocrRouter.post('/upload', upload.single('file'), async (req, res) => {
     return;
   }
 
+  console.log(`[OCR] Using hardcoded patient ID: ${PATIENT_ID}`);
   console.log(`[OCR] File: ${req.file.originalname ?? 'unknown'}, size: ${req.file.size} bytes, type: ${req.file.mimetype}`);
 
   let imageBuffer = req.file.buffer;
@@ -148,14 +150,14 @@ ocrRouter.post('/upload', upload.single('file'), async (req, res) => {
 
     const vitals = parseVitals(data.text);
 
-    // ── Auto-save to HAPI FHIR with hardcoded patientId ──────────────────────
-    console.log(`[OCR] Auto-saving vitals to HAPI for patient ${DEFAULT_PATIENT_ID}`);
-    const savedObservations = await saveVitalsToHapi(vitals, DEFAULT_PATIENT_ID);
+    // ── Auto-save to HAPI FHIR with hardcoded patient ID ─────────────────────
+    console.log(`[OCR] Auto-saving vitals to HAPI for patient ${PATIENT_ID}`);
+    const savedObservations = await saveVitalsToHapi(vitals, PATIENT_ID);
     console.log(`[OCR] Saved ${savedObservations.length} observation(s) to HAPI`);
 
     res.json({
       ...vitals,
-      patientId: DEFAULT_PATIENT_ID,
+      patientId: PATIENT_ID,
       saved: true,
       savedCount: savedObservations.length,
       savedIds: savedObservations.map((o: any) => o.id),
@@ -275,13 +277,11 @@ async function saveVitalsToHapi(vitals: ParsedVitals, patientId: string): Promis
 }
 
 // ─── POST /ocr/save ──────────────────────────────────────────────────────────
-// Manual save endpoint — strictly uses DEFAULT_PATIENT_ID (1000)
+// Manual save endpoint — uses hardcoded PATIENT_ID
 ocrRouter.post('/save', async (req, res) => {
   const data = req.body;
-  // Always use DEFAULT_PATIENT_ID (1000) regardless of what is in the body
-  const patientId: string = DEFAULT_PATIENT_ID;
 
-  console.log(`[OCR] /save called for patient ${patientId}`);
+  console.log(`[OCR] /save called for hardcoded patient ${PATIENT_ID}`);
   console.log(`[OCR] Vitals received:`, JSON.stringify({
     hemoglobin: data.hemoglobin,
     glucose: data.glucose,
@@ -304,10 +304,10 @@ ocrRouter.post('/save', async (req, res) => {
     return;
   }
 
-  const results = await saveVitalsToHapi(vitals, patientId);
+  const results = await saveVitalsToHapi(vitals, PATIENT_ID);
   res.json({
     success: results.length > 0,
-    patientId,
+    patientId: PATIENT_ID,
     hapiUrl: HAPI_FHIR_URL,
     count: results.length,
     savedIds: results.map((o: any) => o.id),
