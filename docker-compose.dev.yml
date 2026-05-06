@@ -53,8 +53,8 @@ services:
       test: ["CMD", "curl", "-f", "http://localhost:8080/fhir/metadata"]
       interval: 30s
       timeout: 10s
-      retries: 5
-      start_period: 40s
+      retries: 10
+      start_period: 120s
 
   # Medplum server with volume mounting for hot reload development
   medplum-server:
