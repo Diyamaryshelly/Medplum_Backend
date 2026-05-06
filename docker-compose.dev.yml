@@ -103,7 +103,7 @@ services:
       MEDPLUM_REDIS_HOST: 'redis'
       MEDPLUM_REDIS_PORT: 6379
       MEDPLUM_REDIS_PASSWORD: 'medplum'
-      MEDPLUM_BINARY_STORAGE: 'file:./binary/'
+      MEDPLUM_BINARY_STORAGE: 'database'
       MEDPLUM_SUPPORT_EMAIL: '"Medplum" <support@medplum.com>'
       MEDPLUM_GOOGLE_CLIENT_ID: '397236612778-c0b5tnjv98frbo1tfuuha5vkme3cmq4s.apps.googleusercontent.com'
       MEDPLUM_GOOGLE_CLIENT_SECRET: ''

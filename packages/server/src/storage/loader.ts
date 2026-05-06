@@ -7,6 +7,7 @@ import { GoogleCloudStorage } from '../cloud/gcp/storage';
 import { getConfig } from '../config/loader';
 import type { PresignedUrlOptions } from './base';
 import { FileSystemStorage } from './filesystem';
+import { PostgresBinaryStorage } from './postgres';
 import { generatePresignedUrl } from './presign';
 import type { BinaryStorage } from './types';
 
@@ -21,6 +22,8 @@ export function initBinaryStorage(type?: string): void {
     binaryStorage = new FileSystemStorage(type.replace('file:', ''));
   } else if (type?.startsWith('gs:')) {
     binaryStorage = new GoogleCloudStorage(type.replace('gs:', ''));
+  } else if (type === 'database' || type === 'postgres' || type === 'postgresql') {
+    binaryStorage = new PostgresBinaryStorage();
   } else {
     binaryStorage = undefined;
   }
